@@ -1,0 +1,23 @@
+version: '3'
+
+tasks:
+  default:
+    desc: アプリケーションを実行します
+    cmds:
+      - task: run
+
+  run:
+    desc: Goコードを直接実行してTUIを起動します
+    cmds:
+      - go run ./cmd/ntui
+
+  build:
+    desc: バイナリをビルドして bin/ ディレクトリに出力します
+    cmds:
+      - mkdir -p bin
+      - go build -o bin/notion-tui ./cmd/ntui
+
+  install:
+    desc: Goの標準パス（~/go/bin）にバイナリをインストールします
+    cmds:
+      - go install ./cmd/ntui
