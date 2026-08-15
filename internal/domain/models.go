@@ -3,9 +3,10 @@ package domain
 import "github.com/jomei/notionapi"
 
 type InventoryItem struct {
-	ID    notionapi.ObjectID
-	Name  string
-	Stock int
+	ID         notionapi.ObjectID
+	Name       string
+	Stock      int
+	Categories []string
 }
 
 type ShoppingItem struct {

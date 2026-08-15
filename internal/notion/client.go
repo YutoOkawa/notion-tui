@@ -37,7 +37,13 @@ func (c *Client) FetchData(ctx context.Context) ([]domain.InventoryItem, []domai
 		if numProp, ok := page.Properties[StockPropertyName].(*notionapi.NumberProperty); ok {
 			stock = int(numProp.Number)
 		}
-		items = append(items, domain.InventoryItem{ID: page.ID, Name: name, Stock: stock})
+		var categories []string
+		if prop, ok := page.Properties["分類"].(*notionapi.MultiSelectProperty); ok {
+			for _, opt := range prop.MultiSelect {
+				categories = append(categories, opt.Name)
+			}
+		}
+		items = append(items, domain.InventoryItem{ID: page.ID, Name: name, Stock: stock, Categories: categories})
 	}
 
 	shopQuery := &notionapi.DatabaseQueryRequest{

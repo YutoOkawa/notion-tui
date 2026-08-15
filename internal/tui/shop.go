@@ -24,8 +24,12 @@ type ShopModel struct {
 	leftCursor  int
 	rightCursor int
 
+	allItems []domain.InventoryItem
 	items    []domain.InventoryItem
 	shopping []domain.ShoppingItem
+
+	categories    []string
+	categoryIndex int
 	loading  bool
 	err      error
 }
@@ -35,15 +39,36 @@ type dataLoadedMsg struct {
 	shopping []domain.ShoppingItem
 }
 type itemAddedMsg struct{ item domain.ShoppingItem }
-type itemCheckedMsg struct{ id notionapi.ObjectID }
+type itemCheckedMsg struct {
+	id       notionapi.ObjectID
+	hasInv   bool
+	invIndex int
+}
 type stockUpdatedMsg struct{}
 type errMsg struct{ err error }
 
 func NewShopModel(client NotionClient) ShopModel {
 	return ShopModel{
-		client:  client,
-		loading: true,
+		client:     client,
+		loading:    true,
+		categories: []string{"全て"},
 	}
+}
+
+func filterInventoryItems(all []domain.InventoryItem, category string) []domain.InventoryItem {
+	if category == "全て" {
+		return all
+	}
+	var filtered []domain.InventoryItem
+	for _, item := range all {
+		for _, cat := range item.Categories {
+			if cat == category {
+				filtered = append(filtered, item)
+				break
+			}
+		}
+	}
+	return filtered
 }
 
 func (m ShopModel) Init() tea.Cmd {
@@ -59,7 +84,20 @@ func (m ShopModel) Init() tea.Cmd {
 func (m ShopModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case dataLoadedMsg:
-		m.items = msg.items
+		m.allItems = msg.items
+		
+		catMap := make(map[string]bool)
+		m.categories = []string{"全て"}
+		for _, item := range m.allItems {
+			for _, cat := range item.Categories {
+				if !catMap[cat] {
+					catMap[cat] = true
+					m.categories = append(m.categories, cat)
+				}
+			}
+		}
+
+		m.items = filterInventoryItems(m.allItems, m.categories[m.categoryIndex])
 		m.shopping = msg.shopping
 		m.loading = false
 		return m, nil
@@ -78,6 +116,9 @@ func (m ShopModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.shopping = newShopping
 		if m.rightCursor >= len(m.shopping) && m.rightCursor > 0 {
 			m.rightCursor = len(m.shopping) - 1
+		}
+		if msg.hasInv && msg.invIndex < len(m.items) {
+			m.items[msg.invIndex].Stock++
 		}
 		return m, nil
 
@@ -99,6 +140,13 @@ func (m ShopModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activePane = 1
 			} else {
 				m.activePane = 0
+			}
+
+		case "/":
+			if m.activePane == 0 && len(m.categories) > 0 {
+				m.categoryIndex = (m.categoryIndex + 1) % len(m.categories)
+				m.items = filterInventoryItems(m.allItems, m.categories[m.categoryIndex])
+				m.leftCursor = 0
 			}
 
 		case "up", "k":
@@ -174,12 +222,31 @@ func (m ShopModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if m.activePane == 1 && len(m.shopping) > 0 {
 				item := m.shopping[m.rightCursor]
+
+				var invItem *domain.InventoryItem
+				var invIndex int
+				for i, iv := range m.items {
+					if iv.Name == item.Name {
+						invItem = &m.items[i]
+						invIndex = i
+						break
+					}
+				}
+
 				return m, func() tea.Msg {
 					err := m.client.CheckShoppingItem(context.Background(), item.ID)
 					if err != nil {
 						return errMsg{err}
 					}
-					return itemCheckedMsg{id: item.ID}
+
+					if invItem != nil {
+						err = m.client.UpdateStock(context.Background(), invItem.ID, invItem.Stock+1)
+						if err != nil {
+							return errMsg{err}
+						}
+					}
+
+					return itemCheckedMsg{id: item.ID, hasInv: invItem != nil, invIndex: invIndex}
 				}
 			}
 		}
@@ -207,6 +274,18 @@ func (m ShopModel) View() string {
 	}
 
 	s := titleStyle.Foreground(lipgloss.Color("205")).Render("📦 在庫マスター") + "\n"
+	
+	// 分類タブを描画
+	tabStr := ""
+	for i, cat := range m.categories {
+		if i == m.categoryIndex {
+			tabStr += lipgloss.NewStyle().Foreground(lipgloss.Color("43")).Bold(true).Render("["+cat+"]") + " "
+		} else {
+			tabStr += lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(cat) + " "
+		}
+	}
+	s += tabStr + "\n\n"
+
 	if len(m.items) == 0 {
 		s += lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("データがありません\n")
 	}
@@ -248,7 +327,7 @@ func (m ShopModel) View() string {
 	rightPane := rightStyle.Render(rightContent)
 
 	ui := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, "   ", rightPane)
-	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginTop(1).Render("Tab: ペイン切替  +/-/Enter: 在庫増減/完了  q: 終了")
+	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginTop(1).Render("Tab: ペイン切替  /: 分類切替  +/-/Enter: 在庫増減/完了  q: 終了")
 
 	return "\n" + ui + "\n" + footer + "\n"
 }
