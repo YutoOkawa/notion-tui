@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -23,6 +24,7 @@ const (
 	StateBrowse MonstState = iota
 	StateSelectAccount
 	StateEditWakuwaku
+	StateFilterMenu
 )
 
 type MonstModel struct {
@@ -53,6 +55,13 @@ type MonstModel struct {
 	wakuwakuCursor int
 	wakuOffset     int
 	selectedWaku   map[notionapi.ObjectID]bool
+
+	// StateFilterMenu
+	events         []string
+	eventIndex     int
+	sortOrders     []string
+	sortOrderIndex int
+	filterCursor   int
 }
 
 type wakuwakuLoadedMsg struct {
@@ -64,10 +73,12 @@ type relationUpdatedMsg struct{}
 
 func NewMonstModel(client MonstClientInterface) MonstModel {
 	return MonstModel{
-		client:   client,
-		loading:  true,
-		attrs:    []string{"全て", "火", "水", "木", "光", "闇"},
-		accounts: []string{"アカウントA", "アカウントB", "アカウントC", "アカウントD", "アカウントA-2", "アカウントB-2"},
+		client:     client,
+		loading:    true,
+		attrs:      []string{"全て", "火", "水", "木", "光", "闇"},
+		accounts:   []string{"アカウントA", "アカウントB", "アカウントC", "アカウントD", "アカウントA-2", "アカウントB-2"},
+		events:     []string{"全て"},
+		sortOrders: []string{"優先度順", "属性順", "五十音順"},
 	}
 }
 
@@ -92,17 +103,41 @@ func (m MonstModel) fetchMonstersCmd() tea.Cmd {
 	}
 }
 
-func filterMonsters(all []domain.Monster, attr string) []domain.Monster {
-	if attr == "全て" {
-		return all
-	}
+func filterMonsters(all []domain.Monster, attr string, event string, sortOrder string) []domain.Monster {
 	var filtered []domain.Monster
 	for _, mon := range all {
-		if mon.Attribute == attr {
+		if (attr == "全て" || mon.Attribute == attr) &&
+			(event == "全て" || mon.Event == event) {
 			filtered = append(filtered, mon)
 		}
 	}
+
+	sort.SliceStable(filtered, func(i, j int) bool {
+		switch sortOrder {
+		case "優先度順":
+			return priorityScore(filtered[i].Priority) > priorityScore(filtered[j].Priority)
+		case "属性順":
+			return filtered[i].Attribute < filtered[j].Attribute
+		case "五十音順":
+			return filtered[i].Name < filtered[j].Name
+		}
+		return false
+	})
 	return filtered
+}
+
+func priorityScore(p string) int {
+	switch p {
+	case "S":
+		return 4
+	case "A":
+		return 3
+	case "B":
+		return 2
+	case "C":
+		return 1
+	}
+	return 0
 }
 
 func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -114,7 +149,15 @@ func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case monstersLoadedMsg:
 		m.allMonsters = msg.monsters
-		m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex])
+		eventMap := make(map[string]bool)
+		m.events = []string{"全て"}
+		for _, mon := range m.allMonsters {
+			if mon.Event != "" && !eventMap[mon.Event] {
+				eventMap[mon.Event] = true
+				m.events = append(m.events, mon.Event)
+			}
+		}
+		m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex], m.events[m.eventIndex], m.sortOrders[m.sortOrderIndex])
 		if m.monsterIndex >= len(m.monsters) {
 			m.monsterIndex = 0
 			m.listOffset = 0
@@ -147,6 +190,8 @@ func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = StateBrowse
 			} else if m.state == StateEditWakuwaku {
 				m.state = StateSelectAccount
+			} else if m.state == StateFilterMenu {
+				m.state = StateBrowse
 			}
 			return m, nil
 		}
@@ -154,10 +199,13 @@ func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.state {
 		case StateBrowse:
 			switch msg.String() {
+			case "f":
+				m.state = StateFilterMenu
+				m.filterCursor = 0
 			case "left", "h":
 				if m.attrIndex > 0 {
 					m.attrIndex--
-					m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex])
+					m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex], m.events[m.eventIndex], m.sortOrders[m.sortOrderIndex])
 					m.monsterIndex = 0
 					m.listOffset = 0
 					return m, nil
@@ -165,7 +213,7 @@ func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "right", "l":
 				if m.attrIndex < len(m.attrs)-1 {
 					m.attrIndex++
-					m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex])
+					m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex], m.events[m.eventIndex], m.sortOrders[m.sortOrderIndex])
 					m.monsterIndex = 0
 					m.listOffset = 0
 					return m, nil
@@ -189,6 +237,54 @@ func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = StateSelectAccount
 					m.accountIndex = 0
 				}
+			}
+
+		case StateFilterMenu:
+			switch msg.String() {
+			case "up", "k":
+				if m.filterCursor > 0 {
+					m.filterCursor--
+				}
+			case "down", "j":
+				if m.filterCursor < 2 {
+					m.filterCursor++
+				}
+			case "left", "h":
+				switch m.filterCursor {
+				case 0:
+					if m.attrIndex > 0 {
+						m.attrIndex--
+					}
+				case 1:
+					if m.eventIndex > 0 {
+						m.eventIndex--
+					}
+				case 2:
+					if m.sortOrderIndex > 0 {
+						m.sortOrderIndex--
+					}
+				}
+				m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex], m.events[m.eventIndex], m.sortOrders[m.sortOrderIndex])
+				m.monsterIndex = 0
+				m.listOffset = 0
+			case "right", "l":
+				switch m.filterCursor {
+				case 0:
+					if m.attrIndex < len(m.attrs)-1 {
+						m.attrIndex++
+					}
+				case 1:
+					if m.eventIndex < len(m.events)-1 {
+						m.eventIndex++
+					}
+				case 2:
+					if m.sortOrderIndex < len(m.sortOrders)-1 {
+						m.sortOrderIndex++
+					}
+				}
+				m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex], m.events[m.eventIndex], m.sortOrders[m.sortOrderIndex])
+				m.monsterIndex = 0
+				m.listOffset = 0
 			}
 
 		case StateSelectAccount:
@@ -358,7 +454,25 @@ func (m MonstModel) View() string {
 		rightContent += titleStyle.Foreground(lipgloss.Color("43")).Render("🍎 【"+monster.Name+"】") + "\n"
 		rightContent += fmt.Sprintf("属性: %s  /  優先度: %s\n\n", monster.Attribute, monster.Priority)
 
-		if m.state == StateEditWakuwaku {
+		if m.state == StateFilterMenu {
+			rightContent += lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render("🔍 フィルター＆ソート設定") + "\n\n"
+			
+			renderOption := func(label string, options []string, index int, isActive bool) string {
+				optStr := options[index]
+				if index > 0 { optStr = "◁ " + optStr } else { optStr = "  " + optStr }
+				if index < len(options)-1 { optStr += " ▷" } else { optStr += "  " }
+				
+				line := fmt.Sprintf("%-6s: %s", label, optStr)
+				if isActive {
+					return selectedStyle.Render("> " + line) + "\n"
+				}
+				return "  " + line + "\n"
+			}
+			
+			rightContent += renderOption("属性", m.attrs, m.attrIndex, m.filterCursor == 0)
+			rightContent += renderOption("イベント", m.events, m.eventIndex, m.filterCursor == 1)
+			rightContent += renderOption("ソート順", m.sortOrders, m.sortOrderIndex, m.filterCursor == 2)
+		} else if m.state == StateEditWakuwaku {
 			// わくわくの実ピッカー
 			rightContent += lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Render("📝 "+m.accounts[m.accountIndex]+" の実を編集") + "\n"
 			for i := m.wakuOffset; i < m.wakuOffset+10 && i < len(m.wakuwakuList); i++ {
@@ -424,6 +538,8 @@ func (m MonstModel) View() string {
 		footerStr = "↑/↓: 移動   Enter/Space: 選択/解除   s: 保存   Esc: キャンセル"
 	} else if m.state == StateSelectAccount {
 		footerStr = "↑/↓: アカウント選択   Enter: 実を編集   Esc: 戻る"
+	} else if m.state == StateFilterMenu {
+		footerStr = "↑/↓: 項目選択   ←/→: 値変更   Esc: 戻る"
 	}
 	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginTop(1).Render(footerStr)
 

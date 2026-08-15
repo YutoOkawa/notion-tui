@@ -94,6 +94,8 @@ func (c *MonstClient) FetchMonsters(ctx context.Context, attribute string) ([]do
 			name := extractTitle(page, "モンスター名", "title", "名前")
 			attr := extractSelect(page, "属性")
 			priority := extractSelect(page, "優先度")
+			event := extractSelect(page, "入手イベント名")
+			abilities := extractMultiSelect(page, "アビリティ")
 			has := extractCheckbox(page, "所持")
 
 			monsters = append(monsters, domain.Monster{
@@ -101,6 +103,8 @@ func (c *MonstClient) FetchMonsters(ctx context.Context, attribute string) ([]do
 				Name:      name,
 				Attribute: attr,
 				Priority:  priority,
+				Event:     event,
+				Abilities: abilities,
 				Has:       has,
 				AccountA:  extractRelations(page, "アカウントA"),
 				AccountB:  extractRelations(page, "アカウントB"),
@@ -155,4 +159,14 @@ func extractRelations(page notionapi.Page, key string) []notionapi.ObjectID {
 		}
 	}
 	return ids
+}
+
+func extractMultiSelect(page notionapi.Page, key string) []string {
+	var results []string
+	if prop, ok := page.Properties[key].(*notionapi.MultiSelectProperty); ok {
+		for _, opt := range prop.MultiSelect {
+			results = append(results, opt.Name)
+		}
+	}
+	return results
 }

@@ -12,6 +12,8 @@ type Monster struct {
 	Name      string
 	Attribute string
 	Priority  string
+	Event     string
+	Abilities []string
 	Has       bool
 	AccountA  []notionapi.ObjectID
 	AccountB  []notionapi.ObjectID
