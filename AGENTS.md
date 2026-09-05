@@ -30,5 +30,9 @@
   Bubble Tea の `Update` ロジック等に複雑な状態遷移が追加された場合はテストを記述してください。APIクライアントのインターフェースをモック化して検証を行いますが、状態（スライスやマップ）の初期化を怠ると容易に `panic` するため、テスト時のダミーデータ構築は網羅的に行うこと。
 
 ## 4. 実行・ビルド方法
-* 実行: `go run ./cmd/ntui [subcommand]` (例: `go run ./cmd/ntui shop`)
+本プロジェクトではタスクランナーとして `go-task` (`Taskfile.yml`) を使用しています。エージェントがビルドや実行を行う際、またはユーザーに案内する際は、直接の `go run` や `go build` ではなく以下のコマンドを前提としてください。
+
+* 実行: `task run` (内部で `go run ./cmd/ntui` を実行)
+* ビルド: `task build` (バイナリを `bin/notion-tui` に出力)
+* インストール: `task install` (`$GOPATH/bin` にインストール。以降ユーザー環境では `ntui [subcommand]` で実行可能)
 * テスト: `go test ./...`
