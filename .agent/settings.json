@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "command(git status*)",
+      "command(git diff*)",
+      "command(git log*)",
+      "command(go test*)",
+      "command(*ntui* --help*)",
+      "command(task --list*)",
+      "mcp_tool(notion-all/API-retrieve-*)",
+      "mcp_tool(notion-all/API-query-*)"
+    ],
+    "deny": [
+      "read_file(*.env*)",
+      "read_file(.env)"
+    ]
+  }
+}
