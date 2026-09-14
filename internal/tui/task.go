@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -16,7 +18,9 @@ type TaskClientInterface interface {
 	FetchPersonalTasks(ctx context.Context) ([]domain.TaskItem, error)
 	UpdateTaskStatus(ctx context.Context, pageID notionapi.ObjectID, newStatus string) error
 	UpdateTaskDueDate(ctx context.Context, pageID notionapi.ObjectID, dueDate string) error
-	AddPersonalTask(ctx context.Context, name, dueDate string) (domain.TaskItem, error)
+	AddPersonalTask(ctx context.Context, name, dueDate, content string) (domain.TaskItem, error)
+	FetchTaskBody(ctx context.Context, pageID notionapi.ObjectID) (string, error)
+	EditTaskBody(ctx context.Context, pageID notionapi.ObjectID, newMarkdown string) error
 }
 
 type TaskState int
@@ -93,11 +97,82 @@ func (m *TaskModel) updateDueCmd(id notionapi.ObjectID, due string) tea.Cmd {
 
 func (m *TaskModel) addTaskCmd(name, due string) tea.Cmd {
 	return func() tea.Msg {
-		if _, err := m.client.AddPersonalTask(context.Background(), name, due); err != nil {
+		if _, err := m.client.AddPersonalTask(context.Background(), name, due, ""); err != nil {
 			return taskErrMsg{err}
 		}
 		return taskActionDoneMsg{}
 	}
+}
+
+type taskBodyFetchedMsg struct {
+	pageID  notionapi.ObjectID
+	content string
+}
+
+func (m *TaskModel) fetchBodyCmd(pageID notionapi.ObjectID) tea.Cmd {
+	return func() tea.Msg {
+		content, err := m.client.FetchTaskBody(context.Background(), pageID)
+		if err != nil {
+			return taskErrMsg{err}
+		}
+		return taskBodyFetchedMsg{pageID: pageID, content: content}
+	}
+}
+
+type taskUpdateBodyMsg struct {
+	pageID  notionapi.ObjectID
+	content string
+}
+
+type taskBodyUpdatedMsg struct {
+	pageID notionapi.ObjectID
+}
+
+func (m *TaskModel) updateBodyCmd(pageID notionapi.ObjectID, content string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.client.EditTaskBody(context.Background(), pageID, content)
+		if err != nil {
+			return taskErrMsg{err}
+		}
+		return taskBodyUpdatedMsg{pageID: pageID}
+	}
+}
+
+func (m *TaskModel) openEditorCmd(pageID notionapi.ObjectID, content string) tea.Cmd {
+	tmpFile, err := os.CreateTemp("", "ntui-edit-*.md")
+	if err != nil {
+		return func() tea.Msg { return taskErrMsg{err} }
+	}
+
+	tmpFile.WriteString(content)
+	tmpFile.Close()
+
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vim"
+	}
+
+	c := exec.Command(editor, tmpFile.Name())
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		if err != nil {
+			os.Remove(tmpFile.Name())
+			return taskErrMsg{err}
+		}
+
+		newContentBytes, err := os.ReadFile(tmpFile.Name())
+		os.Remove(tmpFile.Name())
+
+		if err != nil {
+			return taskErrMsg{err}
+		}
+
+		newContent := strings.TrimSpace(string(newContentBytes))
+		if newContent == strings.TrimSpace(content) {
+			return nil // No change, do nothing
+		}
+
+		return taskUpdateBodyMsg{pageID: pageID, content: newContent}
+	})
 }
 
 func (m *TaskModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -120,6 +195,16 @@ func (m *TaskModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		return m, m.fetchTasksCmd()
 
+	case taskBodyUpdatedMsg:
+		m.loading = false
+		return m, nil
+	case taskBodyFetchedMsg:
+		m.loading = false
+		return m, m.openEditorCmd(msg.pageID, msg.content)
+	case taskUpdateBodyMsg:
+		m.loading = true
+		return m, m.updateBodyCmd(msg.pageID, msg.content)
+
 	case taskErrMsg:
 		m.err = msg.err
 		m.state = taskStateBrowse // reset state
@@ -138,11 +223,17 @@ func (m *TaskModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.cursor < len(m.tasks)-1 {
 					m.cursor++
 				}
-			case "s", "enter": // Toggle Status
+			case "s": // Toggle Status
 				if len(m.tasks) > 0 {
 					t := m.tasks[m.cursor]
 					nextStatus := getNextStatus(t.Status)
 					return m, m.updateStatusCmd(t.ID, nextStatus)
+				}
+			case "enter": // Open Editor
+				if len(m.tasks) > 0 {
+					t := m.tasks[m.cursor]
+					m.loading = true
+					return m, m.fetchBodyCmd(t.ID)
 				}
 			case "d": // Set Due Date
 				if len(m.tasks) > 0 {
@@ -251,7 +342,7 @@ func (m *TaskModel) View() string {
 
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	if m.state == taskStateBrowse {
-		sb.WriteString(helpStyle.Render("up/down: 移動 | s/enter: ステータス切替 | d: 期限設定 | a: 新規追加 | q: 終了"))
+		sb.WriteString(helpStyle.Render("up/down: 移動 | s: ステータス切替 | enter: 詳細確認・編集 | d: 期限設定 | a: 新規追加 | q: 終了"))
 	} else if m.state == taskStateInputDue {
 		sb.WriteString("期限を入力 (YYYY-MM-DD または空でクリア):\n")
 		sb.WriteString(m.textInput.View() + "\n\n")

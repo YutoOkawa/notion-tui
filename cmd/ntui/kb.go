@@ -16,7 +16,17 @@ import (
 var kbCmd = &cobra.Command{
 	Use:   "kb [theme]",
 	Short: "AIに調査してほしいテーマをナレッジベースに追加",
-	Long:  `ナレッジベースDBに下書きラベルで新規作成するコマンドです。引数を指定した場合はTUIをスキップして直接作成します。`,
+	Long: `ナレッジベースDBに「下書き」ラベルで新規作成を行うコマンドです。
+引数なしで実行するとTUIが起動します。
+
+【CLIモード（引数ありで実行）】
+  テーマ名を引数として直接渡すことで、TUIをスキップして即座に下書きアイテムを登録できます。`,
+	Example: `  # TUIを起動してカテゴリを選びながらテーマを登録する
+  ntui kb
+
+  # コマンドラインから直接テーマを登録する
+  ntui kb "Go言語のインターフェースのベストプラクティス"
+  ntui kb GraphQLとREST APIの比較`,
 	Run: func(cmd *cobra.Command, args []string) {
 		godotenv.Load()
 

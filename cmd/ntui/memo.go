@@ -17,6 +17,16 @@ import (
 var memoCmd = &cobra.Command{
 	Use:   "memo",
 	Short: "アイデア＆思考ログの管理 (一覧/作成)",
+	Long: `アイデアや思考ログの管理を行うコマンドです。
+引数なしで実行するとTUIが起動します。
+
+【CLIモード】
+  サブコマンド add を使うことで、TUIを起動せずに直接エディタを開いてメモを作成できます。`,
+	Example: `  # TUIを起動してメモを管理する
+  ntui memo
+
+  # エディタを直接起動して新しいメモを追加する
+  ntui memo add`,
 	Run: func(cmd *cobra.Command, args []string) {
 		godotenv.Load()
 		token := os.Getenv("NOTION_TOKEN")
@@ -39,6 +49,10 @@ var memoCmd = &cobra.Command{
 var memoAddCmd = &cobra.Command{
 	Use:   "add",
 	Short: "Vim等のエディタを開いて新規メモを作成する",
+	Long: `環境変数 $EDITOR（デフォルトはvim）を起動し、Markdown形式で新規メモを作成します。
+1行目が「名前（タイトル）」として扱われ、2行目以降が「本文」として保存されます。`,
+	Example: `  # 新規メモ作成のためのエディタを立ち上げる
+  ntui memo add`,
 	Run: func(cmd *cobra.Command, args []string) {
 		godotenv.Load()
 		token := os.Getenv("NOTION_TOKEN")

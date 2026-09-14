@@ -3,6 +3,8 @@ package notion
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/jomei/notionapi"
@@ -120,7 +122,7 @@ func (c *TaskClient) UpdateTaskDueDate(ctx context.Context, pageID notionapi.Obj
 }
 
 // AddPersonalTask adds a new Personal task
-func (c *TaskClient) AddPersonalTask(ctx context.Context, name, dueDate string) (domain.TaskItem, error) {
+func (c *TaskClient) AddPersonalTask(ctx context.Context, name, dueDate, content string) (domain.TaskItem, error) {
 	props := notionapi.Properties{
 		"Task name": notionapi.TitleProperty{
 			Title: []notionapi.RichText{{Text: &notionapi.Text{Content: name}}},
@@ -142,9 +144,27 @@ func (c *TaskClient) AddPersonalTask(ctx context.Context, name, dueDate string) 
 		props["Due"] = notionapi.DateProperty{Date: &notionapi.DateObject{Start: &nd}}
 	}
 
+	var children []notionapi.Block
+	if content != "" {
+		children = append(children, notionapi.ParagraphBlock{
+			BasicBlock: notionapi.BasicBlock{
+				Object: "block",
+				Type:   notionapi.BlockTypeParagraph,
+			},
+			Paragraph: notionapi.Paragraph{
+				RichText: []notionapi.RichText{
+					{
+						Text: &notionapi.Text{Content: content},
+					},
+				},
+			},
+		})
+	}
+
 	res, err := c.api.Page.Create(ctx, &notionapi.PageCreateRequest{
 		Parent:     notionapi.Parent{Type: notionapi.ParentTypeDatabaseID, DatabaseID: c.tasksDBID},
 		Properties: props,
+		Children:   children,
 	})
 	if err != nil {
 		return domain.TaskItem{}, fmt.Errorf("タスク追加エラー: %w", err)
@@ -157,4 +177,63 @@ func (c *TaskClient) AddPersonalTask(ctx context.Context, name, dueDate string) 
 		DueDate:  dueDate,
 		TaskType: "Personal",
 	}, nil
+}
+
+func (c *TaskClient) FetchTaskBody(ctx context.Context, pageID notionapi.ObjectID) (string, error) {
+	resp, err := c.api.Block.GetChildren(ctx, notionapi.BlockID(pageID), nil)
+	if err != nil {
+		return "", fmt.Errorf("本文取得エラー: %w", err)
+	}
+
+	var sb strings.Builder
+	for _, block := range resp.Results {
+		switch b := block.(type) {
+		case *notionapi.ParagraphBlock:
+			sb.WriteString(richTextToPlainText(b.Paragraph.RichText) + "\n\n")
+		case *notionapi.Heading1Block:
+			sb.WriteString("# " + richTextToPlainText(b.Heading1.RichText) + "\n\n")
+		case *notionapi.Heading2Block:
+			sb.WriteString("## " + richTextToPlainText(b.Heading2.RichText) + "\n\n")
+		case *notionapi.Heading3Block:
+			sb.WriteString("### " + richTextToPlainText(b.Heading3.RichText) + "\n\n")
+		case *notionapi.BulletedListItemBlock:
+			sb.WriteString("- " + richTextToPlainText(b.BulletedListItem.RichText) + "\n")
+		case *notionapi.QuoteBlock:
+			sb.WriteString("> " + richTextToPlainText(b.Quote.RichText) + "\n\n")
+		case *notionapi.CodeBlock:
+			sb.WriteString("```" + b.Code.Language + "\n" + richTextToPlainText(b.Code.RichText) + "\n```\n\n")
+		}
+	}
+
+	return strings.TrimSpace(sb.String()), nil
+}
+
+func (c *TaskClient) EditTaskBody(ctx context.Context, pageID notionapi.ObjectID, newMarkdown string) error {
+	resp, err := c.api.Block.GetChildren(ctx, notionapi.BlockID(pageID), nil)
+	if err != nil {
+		return fmt.Errorf("既存ブロック取得エラー: %w", err)
+	}
+
+	var wg sync.WaitGroup
+	for _, block := range resp.Results {
+		wg.Add(1)
+		go func(bID notionapi.BlockID) {
+			defer wg.Done()
+			c.api.Block.Delete(ctx, bID)
+		}(block.GetID())
+	}
+	wg.Wait()
+
+	newBlocks := parseMarkdownToBlocks(newMarkdown)
+	if len(newBlocks) > 0 {
+		req := &notionapi.AppendBlockChildrenRequest{
+			Children: newBlocks,
+		}
+		_, err = c.api.Block.AppendChildren(ctx, notionapi.BlockID(pageID), req)
+		if err != nil {
+			return fmt.Errorf("本文更新(追加)エラー: %w", err)
+		}
+	}
+
+	return nil
 }
