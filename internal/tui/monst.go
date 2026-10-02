@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jomei/notionapi"
@@ -25,6 +26,7 @@ const (
 	StateSelectAccount
 	StateEditWakuwaku
 	StateFilterMenu
+	StateSearch
 )
 
 type MonstModel struct {
@@ -40,6 +42,9 @@ type MonstModel struct {
 	state   MonstState
 	loading bool
 	err     error
+
+	// Search
+	search textinput.Model
 
 	// StateBrowse
 	attrs        []string
@@ -71,10 +76,36 @@ type wakuwakuLoadedMsg struct {
 type monstersLoadedMsg struct{ monsters []domain.Monster }
 type relationUpdatedMsg struct{}
 
+func normalizeSearchText(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		// 全角英数字を半角小文字に変換
+		if r >= 0xFF21 && r <= 0xFF3A { // Ａ-Ｚ
+			r = r - 0xFF21 + 'a'
+		} else if r >= 0xFF41 && r <= 0xFF5A { // ａ-ｚ
+			r = r - 0xFF41 + 'a'
+		} else if r >= 0xFF10 && r <= 0xFF19 { // ０-９
+			r = r - 0xFF10 + '0'
+		} else if r >= 'A' && r <= 'Z' {
+			r = r - 'A' + 'a'
+		} else if r >= 0x3041 && r <= 0x3096 { // ひらがな -> カタカナ
+			r += 0x60
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func NewMonstModel(client MonstClientInterface) MonstModel {
+	ti := textinput.New()
+	ti.Placeholder = "モンスター名で検索... (/ で入力)"
+	ti.CharLimit = 50
+	ti.Width = 30
+
 	return MonstModel{
 		client:     client,
 		loading:    true,
+		search:     ti,
 		attrs:      []string{"全て", "火", "水", "木", "光", "闇"},
 		accounts:   []string{"アカウントA", "アカウントB", "アカウントC", "アカウントD", "アカウントA-2", "アカウントB-2"},
 		events:     []string{"全て"},
@@ -103,11 +134,15 @@ func (m MonstModel) fetchMonstersCmd() tea.Cmd {
 	}
 }
 
-func filterMonsters(all []domain.Monster, attr string, event string, sortOrder string) []domain.Monster {
+func filterMonsters(all []domain.Monster, attr string, event string, sortOrder string, query string) []domain.Monster {
+	normQuery := normalizeSearchText(strings.TrimSpace(query))
 	var filtered []domain.Monster
 	for _, mon := range all {
 		if (attr == "全て" || mon.Attribute == attr) &&
 			(event == "全て" || mon.Event == event) {
+			if normQuery != "" && !strings.Contains(normalizeSearchText(mon.Name), normQuery) {
+				continue
+			}
 			filtered = append(filtered, mon)
 		}
 	}
@@ -140,6 +175,14 @@ func priorityScore(p string) int {
 	return 0
 }
 
+func (m *MonstModel) applyFilter() {
+	m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex], m.events[m.eventIndex], m.sortOrders[m.sortOrderIndex], m.search.Value())
+	if m.monsterIndex >= len(m.monsters) {
+		m.monsterIndex = 0
+		m.listOffset = 0
+	}
+}
+
 func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case wakuwakuLoadedMsg:
@@ -157,11 +200,7 @@ func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.events = append(m.events, mon.Event)
 			}
 		}
-		m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex], m.events[m.eventIndex], m.sortOrders[m.sortOrderIndex])
-		if m.monsterIndex >= len(m.monsters) {
-			m.monsterIndex = 0
-			m.listOffset = 0
-		}
+		m.applyFilter()
 		m.loading = false
 		return m, nil
 
@@ -180,8 +219,28 @@ func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // ローディング中は操作ブロック
 		}
 
+		if msg.Type == tea.KeyCtrlC {
+			return m, tea.Quit
+		}
+
+		// 検索入力モードのキーハンドリング
+		if m.state == StateSearch {
+			switch msg.Type {
+			case tea.KeyEsc, tea.KeyEnter:
+				m.state = StateBrowse
+				m.search.Blur()
+				m.applyFilter()
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.search, cmd = m.search.Update(msg)
+				m.applyFilter()
+				return m, cmd
+			}
+		}
+
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "q":
 			if m.state == StateBrowse {
 				return m, tea.Quit
 			}
@@ -192,6 +251,9 @@ func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = StateSelectAccount
 			} else if m.state == StateFilterMenu {
 				m.state = StateBrowse
+			} else if m.state == StateBrowse && m.search.Value() != "" {
+				m.search.SetValue("")
+				m.applyFilter()
 			}
 			return m, nil
 		}
@@ -199,23 +261,23 @@ func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.state {
 		case StateBrowse:
 			switch msg.String() {
+			case "/":
+				m.state = StateSearch
+				m.search.Focus()
+				return m, textinput.Blink
 			case "f":
 				m.state = StateFilterMenu
 				m.filterCursor = 0
 			case "left", "h":
 				if m.attrIndex > 0 {
 					m.attrIndex--
-					m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex], m.events[m.eventIndex], m.sortOrders[m.sortOrderIndex])
-					m.monsterIndex = 0
-					m.listOffset = 0
+					m.applyFilter()
 					return m, nil
 				}
 			case "right", "l":
 				if m.attrIndex < len(m.attrs)-1 {
 					m.attrIndex++
-					m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex], m.events[m.eventIndex], m.sortOrders[m.sortOrderIndex])
-					m.monsterIndex = 0
-					m.listOffset = 0
+					m.applyFilter()
 					return m, nil
 				}
 			case "up", "k":
@@ -264,9 +326,7 @@ func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.sortOrderIndex--
 					}
 				}
-				m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex], m.events[m.eventIndex], m.sortOrders[m.sortOrderIndex])
-				m.monsterIndex = 0
-				m.listOffset = 0
+				m.applyFilter()
 			case "right", "l":
 				switch m.filterCursor {
 				case 0:
@@ -282,9 +342,7 @@ func (m MonstModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.sortOrderIndex++
 					}
 				}
-				m.monsters = filterMonsters(m.allMonsters, m.attrs[m.attrIndex], m.events[m.eventIndex], m.sortOrders[m.sortOrderIndex])
-				m.monsterIndex = 0
-				m.listOffset = 0
+				m.applyFilter()
 			}
 
 		case StateSelectAccount:
@@ -403,7 +461,7 @@ func (m MonstModel) View() string {
 	attrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("43")).Bold(true).Padding(0, 1)
 	inactiveAttrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Padding(0, 1)
 
-	// トップバー（属性選択）
+	// トップバー（属性選択 + 検索バー）
 	topBar := ""
 	for i, attr := range m.attrs {
 		if i == m.attrIndex {
@@ -412,7 +470,8 @@ func (m MonstModel) View() string {
 			topBar += inactiveAttrStyle.Render(attr) + " "
 		}
 	}
-	topBar = "\n  " + topBar + "\n\n"
+	searchBar := "🔍 検索: " + m.search.View()
+	topBar = "\n  " + topBar + "\n  " + searchBar + "\n\n"
 
 	// 左ペイン（モンスター一覧）
 	leftStyle := activeBorder
@@ -533,8 +592,13 @@ func (m MonstModel) View() string {
 
 	ui := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, "   ", rightPane)
 
-	footerStr := "←/→: 属性切替   ↑/↓: 移動   Enter: 選択/編集   q: 終了"
-	if m.state == StateEditWakuwaku {
+	footerStr := "←/→: 属性切替   ↑/↓: 移動   /: 検索   f: フィルター   Enter: 選択/編集   q: 終了"
+	if m.search.Value() != "" {
+		footerStr = "←/→: 属性切替   ↑/↓: 移動   /: 検索   Esc: 検索解除   Enter: 選択/編集   q: 終了"
+	}
+	if m.state == StateSearch {
+		footerStr = "Enter/Esc: 確定して一覧へ   文字入力でリアルタイム検索"
+	} else if m.state == StateEditWakuwaku {
 		footerStr = "↑/↓: 移動   Enter/Space: 選択/解除   s: 保存   Esc: キャンセル"
 	} else if m.state == StateSelectAccount {
 		footerStr = "↑/↓: アカウント選択   Enter: 実を編集   Esc: 戻る"
