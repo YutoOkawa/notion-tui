@@ -1,14 +1,18 @@
 {
   "permissions": {
     "allow": [
-      "command(git status*)",
-      "command(git diff*)",
-      "command(git log*)",
-      "command(go test*)",
-      "command(*ntui* --help*)",
-      "command(task --list*)",
-      "mcp_tool(notion-all/API-retrieve-*)",
-      "mcp_tool(notion-all/API-query-*)"
+      "command(go test)",
+      "command(go build)",
+      "command(git status)",
+      "command(git diff)",
+      "command(git log)",
+      "command(git add)",
+      "command(git commit)",
+      "command(git push)",
+      "command(task)",
+      "command(bin/notion-tui)",
+      "command(./bin/notion-tui)",
+      "mcp_tool(notion-all/*)"
     ],
     "deny": [
       "read_file(*.env*)",
