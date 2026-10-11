@@ -626,6 +626,29 @@ func (m ShopModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, textinput.Blink
 			}
 
+		case "r": // r: 受け取り完了 (次回配送日を +1サイクル進める)
+			if m.activePane == 0 && len(m.items) > 0 {
+				item := m.items[m.leftCursor]
+				if item.IsSubscription {
+					nextDate := domain.AdvanceDeliveryDate(item.NextDeliveryDate, item.SubCycle)
+					for i := range m.allItems {
+						if m.allItems[i].ID == item.ID {
+							m.allItems[i].NextDeliveryDate = nextDate
+							break
+						}
+					}
+					m.items = applyInventoryFilters(m.allItems, m.categories[m.categoryIndex], m.expireFilter, time.Now())
+
+					return m, func() tea.Msg {
+						err := m.client.UpdateNextDeliveryDate(context.Background(), item.ID, nextDate)
+						if err != nil {
+							return errMsg{err}
+						}
+						return deliveryDateUpdatedMsg{id: item.ID, nextDeliveryDate: nextDate}
+					}
+				}
+			}
+
 		case "S": // Shift+S: 定期便スキップ (次回配送日を +1サイクル延長)
 			if m.activePane == 0 && len(m.items) > 0 {
 				item := m.items[m.leftCursor]
@@ -956,11 +979,11 @@ func (m ShopModel) View() string {
 		}
 		switch subInfo.Status {
 		case domain.SubscriptionStatusAlert:
-			subLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true).Render(fmt.Sprintf(" 🚚%s届く%s⚠️(残%d日/在庫%d)[S]スキップ", item.NextDeliveryDate, cycleTag, subInfo.Days, item.Stock))
+			subLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Bold(true).Render(fmt.Sprintf(" 🚚%s届く%s⚠️(残%d日/在庫%d)[S]スキップ [r]受取", item.NextDeliveryDate, cycleTag, subInfo.Days, item.Stock))
 		case domain.SubscriptionStatusDue:
-			subLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("45")).Render(fmt.Sprintf(" 🚚%s届く%s(残%d日)", item.NextDeliveryDate, cycleTag, subInfo.Days))
+			subLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("45")).Render(fmt.Sprintf(" 🚚%s届く%s(残%d日)[r]受取", item.NextDeliveryDate, cycleTag, subInfo.Days))
 		case domain.SubscriptionStatusOverdue:
-			subLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("135")).Render(fmt.Sprintf(" 🚚%s届いたはず%s(受取確認)", item.NextDeliveryDate, cycleTag))
+			subLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("135")).Render(fmt.Sprintf(" 🚚%s届いたはず%s[r]受取完了", item.NextDeliveryDate, cycleTag))
 		case domain.SubscriptionStatusNormal:
 			subLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render(fmt.Sprintf(" 🚚定期%s(%s)", cycleTag, item.NextDeliveryDate))
 		}
@@ -1033,7 +1056,7 @@ func (m ShopModel) View() string {
 	}
 
 	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginTop(1).Render(
-		"Tab: 切替 | a: 追加 | c: 配送期間 | p: 配送日 | S: スキップ | e: 期限 | /: 分類 | f: 絞込 | +/-: 在庫 | q: 終了",
+		"Tab: 切替 | a: 追加 | r: 受取 | S: スキップ | c: 配送期間 | p: 配送日 | e: 期限 | /: 分類 | f: 絞込 | +/-: 在庫 | q: 終了",
 	)
 
 	return "\n" + alertBanner + errorMsg + ui + "\n" + footer + "\n"

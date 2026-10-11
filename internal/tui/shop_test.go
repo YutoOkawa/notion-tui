@@ -376,6 +376,59 @@ func TestShopModel_SubscriptionOverdueAutoAdvance(t *testing.T) {
 	}
 }
 
+func TestShopModel_ReceiveSubscription(t *testing.T) {
+	client := &MockClient{}
+	model := NewShopModel(client)
+
+	// ボディーソープのようにすでに在庫1、配送予定日超過の定期便アイテム
+	msg := dataLoadedMsg{
+		items: []domain.InventoryItem{
+			{
+				ID:               "sub-soap",
+				Name:             "ボディーソープ",
+				Stock:            1,
+				Categories:       []string{"日用品"},
+				IsSubscription:   true,
+				SubCycle:         "2ヶ月",
+				NextDeliveryDate: "2026-10-09",
+			},
+		},
+		shopping: []domain.ShoppingItem{},
+	}
+	updatedModel, _ := model.Update(msg)
+	loadedModel := updatedModel.(ShopModel)
+
+	// 'r' キーを押して受取完了
+	rMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}
+	mAfterR, cmd := loadedModel.Update(rMsg)
+	receivedModel := mAfterR.(ShopModel)
+
+	// 在庫数は1のままで、次回配送日のみが2ヶ月進んで 2026-12-09 になること
+	if receivedModel.items[0].Stock != 1 {
+		t.Errorf("Expected stock to remain 1, got %d", receivedModel.items[0].Stock)
+	}
+	if receivedModel.items[0].NextDeliveryDate != "2026-12-09" {
+		t.Errorf("Expected NextDeliveryDate to be 2026-12-09, got %s", receivedModel.items[0].NextDeliveryDate)
+	}
+
+	if cmd == nil {
+		t.Fatal("Expected tea.Cmd to be returned for API update")
+	}
+	resultMsg := cmd()
+	switch res := resultMsg.(type) {
+	case deliveryDateUpdatedMsg:
+		if res.id != "sub-soap" || res.nextDeliveryDate != "2026-12-09" {
+			t.Errorf("Unexpected deliveryDateUpdatedMsg: %+v", res)
+		}
+	default:
+		t.Fatalf("Expected deliveryDateUpdatedMsg, got %T", resultMsg)
+	}
+
+	if client.updatedDeliveryID != "sub-soap" || client.updatedDeliveryDate != "2026-12-09" {
+		t.Errorf("Client update not called correctly: id=%s date=%s", client.updatedDeliveryID, client.updatedDeliveryDate)
+	}
+}
+
 func TestShopModel_AddInventoryItem(t *testing.T) {
 	client := &MockClient{}
 	model := NewShopModel(client)

@@ -187,6 +187,7 @@ func runExpirationAlert(client *notion.Client) {
 			for _, item := range subOverdues {
 				subInfo := item.GetSubscriptionInfo(now)
 				fmt.Printf("  • %-16s (予定日: %s / %d日超過)\n", item.Name, item.NextDeliveryDate, -subInfo.Days)
+				fmt.Println("    ※ 商品が届いている場合は、ntui上で 'r' を押して受取完了（次回配送日を更新）してください。")
 			}
 			fmt.Println()
 		}
